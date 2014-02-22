@@ -12,11 +12,11 @@ import (
 	rpc4 "github.com/contester/rpc4/proto"
 )
 
-type ServerCodec struct {
+type codec struct {
 	r *bufio.Reader
 	w io.WriteCloser
 
-	hasPayload bool
+	responsePayload, requestPayload bool
 	Shutdown bool
 }
 
@@ -57,11 +57,11 @@ func writeProto(w io.Writer, pb proto.Message) error {
 	return writeData(w, data)
 }
 
-func NewServerCodec(conn net.Conn) *ServerCodec {
-	return &ServerCodec{r: bufio.NewReader(conn), w: conn, hasPayload: false}
+func NewServerCodec(conn net.Conn) *codec {
+	return &codec{r: bufio.NewReader(conn), w: conn}
 }
 
-func (s *ServerCodec) ReadRequestHeader(req *rpc.Request) error {
+func (s *codec) ReadRequestHeader(req *rpc.Request) error {
 	if s.Shutdown {
 		return rpc.ErrShutdown
 	}
@@ -77,25 +77,37 @@ func (s *ServerCodec) ReadRequestHeader(req *rpc.Request) error {
 	req.ServiceMethod = header.GetMethod()
 	req.Seq = header.GetSequence()
 
-	s.hasPayload = header.GetPayloadPresent()
+	s.requestPayload = header.GetPayloadPresent()
 
 	return nil
 }
 
-func (s *ServerCodec) ReadRequestBody(pb interface{}) error {
-	if s.hasPayload {
+func (s *codec) ReadRequestBody(pb interface{}) error {
+	if s.requestPayload {
 		return readProto(s.r, pb.(proto.Message))
 	}
 	return nil
 }
 
-func (s *ServerCodec) WriteResponse(resp *rpc.Response, pb interface{}) (err error) {
+func (s *codec) writeHeaderData(header *rpc4.Header, data []byte) (err error) {
+	if len(data) > 0 {
+		header.PayloadPresent = proto.Bool(true)
+	}
+
+	if err = writeProto(s.w, header); err == nil && header.GetPayloadPresent() {
+		err = writeData(s.w, data)
+	}
+	return
+}
+
+func (s *codec) WriteResponse(resp *rpc.Response, pb interface{}) error {
 	var header rpc4.Header
 	header.Method, header.Sequence, header.MessageType = &resp.ServiceMethod, &resp.Seq, rpc4.Header_RESPONSE.Enum()
 
 	var data []byte
 
 	if resp.Error == "" {
+		var err error
 		if data, err = proto.Marshal(pb.(proto.Message)); err != nil {
 			resp.Error = err.Error()
 		}
@@ -106,20 +118,48 @@ func (s *ServerCodec) WriteResponse(resp *rpc.Response, pb interface{}) (err err
 		data = []byte(resp.Error)
 	}
 
-	if len(data) > 0 {
-		header.PayloadPresent = proto.Bool(true)
+	return s.writeHeaderData(&header, data)
+}
+
+func (s *codec) WriteRequest(req *rpc.Request, pb interface{}) error {
+	var header rpc4.Header
+	header.Method, header.Sequence, header.MessageType = &req.ServiceMethod, &req.Seq, rpc4.Header_REQUEST.Enum()
+	if data, err := proto.Marshal(pb.(proto.Message)); err != nil {
+		return err
+	} else {
+		return s.writeHeaderData(&header, data)
+	}
+	return nil
+}
+
+func (s *codec) ReadResponseHeader(resp *rpc.Response) error {
+	if s.Shutdown {
+		return rpc.ErrShutdown
 	}
 
-	if err = writeProto(s.w, &header); err == nil {
-		if header.GetPayloadPresent() {
-			err = writeData(s.w, data)
-		}
+	var header rpc4.Header
+	if err := readProto(s.r, &header); err != nil {
+		return err
+	}
+	if header.GetMethod() == "" {
+		return fmt.Errorf("header missing method: %s", header)
 	}
 
-	return
+	resp.ServiceMethod = header.GetMethod()
+	resp.Seq = header.GetSequence()
+
+	s.responsePayload = header.GetPayloadPresent()
+	return nil
+}
+
+func (s *codec) ReadResponseBody(pb interface{}) error {
+	if s.responsePayload {
+		return readProto(s.r, pb.(proto.Message))
+	}
+	return nil
 }
 
 // Close closes the underlying conneciton.
-func (s *ServerCodec) Close() error {
+func (s *codec) Close() error {
 	return s.w.Close()
 }
