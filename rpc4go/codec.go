@@ -18,9 +18,6 @@ type ServerCodec struct {
 
 	hasPayload bool
 	Shutdown bool
-
-	headerBuf proto.Buffer
-	dataBlock []byte
 }
 
 type ProtoReader interface {
@@ -28,56 +25,45 @@ type ProtoReader interface {
 	io.ByteReader
 }
 
-func ReadProto(r ProtoReader, pb interface{}) error {
+func ReadProto(r ProtoReader, pb proto.Message) (err error) {
 	var size uint32
-	err := binary.Read(r, binary.BigEndian, &size)
-	if err != nil {
-		return err
+	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
+		return
 	}
 	buf := make([]byte, size)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return err
+	if _, err = io.ReadFull(r, buf); err != nil {
+		return
 	}
 	if pb != nil {
-		var dbuf proto.Buffer
-		dbuf.SetBuf(buf)
-		err := dbuf.Unmarshal(pb.(proto.Message))
-		dbuf.SetBuf(nil)
-		return err
+		err = proto.Unmarshal(buf, pb)
 	}
-	return nil
+	return
 }
 
 // Unbuffered
-func WriteData(w io.Writer, data []byte) error {
-	if err := binary.Write(w, binary.BigEndian, proto.Uint32(uint32(len(data)))); err != nil {
-		return err
+func WriteData(w io.Writer, data []byte) (err error) {
+	if err = binary.Write(w, binary.BigEndian, proto.Uint32(uint32(len(data)))); err != nil {
+		return
 	}
-	if _, err := w.Write(data); err != nil {
-		return err
-	}
-	return nil
+	_, err = w.Write(data)
+	return
 }
 
-func WriteProto(w io.Writer, pb interface{}, ebuf *proto.Buffer) error {
-	// Marshal the protobuf
-	ebuf.Reset()
-	err := ebuf.Marshal(pb.(proto.Message))
+func WriteProto(w io.Writer, pb proto.Message) error {
+	data, err := proto.Marshal(pb)
 	if err != nil {
 		return err
 	}
-	err = WriteData(w, ebuf.Bytes())
-	ebuf.Reset()
-	return err
+	return WriteData(w, data)
 }
 
 func NewServerCodec(conn net.Conn) *ServerCodec {
-	return &ServerCodec{r: bufio.NewReader(conn), w: conn, hasPayload: false, dataBlock: make([]byte, 16*1024*1024)}
+	return &ServerCodec{r: bufio.NewReader(conn), w: conn, hasPayload: false}
 }
 
 func (s *ServerCodec) ReadRequestHeader(req *rpc.Request) error {
 	if s.Shutdown {
-		return fmt.Errorf("Server shutdown requested")
+		return rpc.ErrShutdown
 	}
 
 	var header rpc4.Header
@@ -98,57 +84,39 @@ func (s *ServerCodec) ReadRequestHeader(req *rpc.Request) error {
 
 func (s *ServerCodec) ReadRequestBody(pb interface{}) error {
 	if s.hasPayload {
-		return ReadProto(s.r, pb)
+		return ReadProto(s.r, pb.(proto.Message))
 	}
 	return nil
 }
 
-func (s *ServerCodec) WriteResponse(resp *rpc.Response, pb interface{}) error {
-	mt := rpc4.Header_RESPONSE
-	hasPayload := false
+func (s *ServerCodec) WriteResponse(resp *rpc.Response, pb interface{}) (err error) {
+	var header rpc4.Header
+	header.Method, header.Sequence, header.MessageType = &resp.ServiceMethod, &resp.Seq, rpc4.Header_RESPONSE.Enum()
+
 	var data []byte
-	var err error
+
+	if resp.Error == "" {
+		if data, err = proto.Marshal(pb.(proto.Message)); err != nil {
+			resp.Error = err.Error()
+		}
+	}
 
 	if resp.Error != "" {
-		mt = rpc4.Header_ERROR
+		header.MessageType = rpc4.Header_ERROR.Enum()
 		data = []byte(resp.Error)
-	} else {
-		var dataBuf proto.Buffer
-		dataBuf.SetBuf(s.dataBlock)
-		dataBuf.Reset()
+	}
 
-		err = dataBuf.Marshal(pb.(proto.Message))
-		pb.(proto.Message).Reset()
-		if err != nil {
-			mt = rpc4.Header_ERROR
-			data = []byte(err.Error())
-		} else {
-			data = dataBuf.Bytes()
+	if len(data) > 0 {
+		header.PayloadPresent = proto.Bool(true)
+	}
+
+	if err = WriteProto(s.w, &header); err == nil {
+		if header.GetPayloadPresent() {
+			err = WriteData(s.w, data)
 		}
 	}
 
-	if data != nil && len(data) > 0 {
-		hasPayload = true
-	}
-
-	// Write the header
-	header := rpc4.Header{
-		Method:         &resp.ServiceMethod,
-		Sequence:       &resp.Seq,
-		MessageType:    &mt,
-		PayloadPresent: &hasPayload,
-	}
-	if err = WriteProto(s.w, &header, &s.headerBuf); err != nil {
-		return err
-	}
-
-	if hasPayload {
-		if err = WriteData(s.w, data); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return
 }
 
 // Close closes the underlying conneciton.
