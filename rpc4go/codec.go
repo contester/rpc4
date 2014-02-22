@@ -25,7 +25,7 @@ type ProtoReader interface {
 	io.ByteReader
 }
 
-func ReadProto(r ProtoReader, pb proto.Message) (err error) {
+func readProto(r ProtoReader, pb proto.Message) (err error) {
 	var size uint32
 	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
 		return
@@ -41,7 +41,7 @@ func ReadProto(r ProtoReader, pb proto.Message) (err error) {
 }
 
 // Unbuffered
-func WriteData(w io.Writer, data []byte) (err error) {
+func writeData(w io.Writer, data []byte) (err error) {
 	if err = binary.Write(w, binary.BigEndian, proto.Uint32(uint32(len(data)))); err != nil {
 		return
 	}
@@ -49,12 +49,12 @@ func WriteData(w io.Writer, data []byte) (err error) {
 	return
 }
 
-func WriteProto(w io.Writer, pb proto.Message) error {
+func writeProto(w io.Writer, pb proto.Message) error {
 	data, err := proto.Marshal(pb)
 	if err != nil {
 		return err
 	}
-	return WriteData(w, data)
+	return writeData(w, data)
 }
 
 func NewServerCodec(conn net.Conn) *ServerCodec {
@@ -67,7 +67,7 @@ func (s *ServerCodec) ReadRequestHeader(req *rpc.Request) error {
 	}
 
 	var header rpc4.Header
-	if err := ReadProto(s.r, &header); err != nil {
+	if err := readProto(s.r, &header); err != nil {
 		return err
 	}
 	if header.GetMethod() == "" {
@@ -84,7 +84,7 @@ func (s *ServerCodec) ReadRequestHeader(req *rpc.Request) error {
 
 func (s *ServerCodec) ReadRequestBody(pb interface{}) error {
 	if s.hasPayload {
-		return ReadProto(s.r, pb.(proto.Message))
+		return readProto(s.r, pb.(proto.Message))
 	}
 	return nil
 }
@@ -110,9 +110,9 @@ func (s *ServerCodec) WriteResponse(resp *rpc.Response, pb interface{}) (err err
 		header.PayloadPresent = proto.Bool(true)
 	}
 
-	if err = WriteProto(s.w, &header); err == nil {
+	if err = writeProto(s.w, &header); err == nil {
 		if header.GetPayloadPresent() {
-			err = WriteData(s.w, data)
+			err = writeData(s.w, data)
 		}
 	}
 
