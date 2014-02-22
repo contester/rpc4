@@ -124,12 +124,14 @@ func (s *codec) WriteResponse(resp *rpc.Response, pb interface{}) error {
 func (s *codec) WriteRequest(req *rpc.Request, pb interface{}) error {
 	var header rpc4.Header
 	header.Method, header.Sequence, header.MessageType = &req.ServiceMethod, &req.Seq, rpc4.Header_REQUEST.Enum()
-	if data, err := proto.Marshal(pb.(proto.Message)); err != nil {
-		return err
-	} else {
-		return s.writeHeaderData(&header, data)
+	var data []byte
+	if pb != nil {
+		var err error
+		if data, err = proto.Marshal(pb.(proto.Message)); err != nil {
+			return err
+		}
 	}
-	return nil
+	return s.writeHeaderData(&header, data)
 }
 
 func (s *codec) ReadResponseHeader(resp *rpc.Response) error {
