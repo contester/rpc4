@@ -5,11 +5,9 @@ import com.twitter.util.{Future, Promise}
 import org.jboss.netty.buffer.{ChannelBuffers, ChannelBuffer}
 import org.jboss.netty.channel._
 import org.jboss.netty.handler.codec.frame.FrameDecoder
-import org.stingray.contester.utils.ProtobufTools
-import org.stingray.contester.rpc4.proto.RpcFour
+import org.stingray.contester.rpc4.proto.Rpcfour
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.{AtomicInteger, AtomicBoolean}
-import grizzled.slf4j.Logging
 
 /** Connected server registry. Will be called for connected and disconnected channels.
   *
@@ -59,85 +57,6 @@ class ServerPipelineFactory(registry: Registry) extends ChannelPipelineFactory {
   }
 }
 
-/** Framer for our protocol.
-  * Reads frames prefixed by 4-byte length.
-  */
-private class SimpleFramer extends FrameDecoder {
-  def decode(ctx: ChannelHandlerContext, chan: Channel, buf: ChannelBuffer) = {
-    if (buf.readableBytes() > 4) {
-      buf.markReaderIndex()
-      val length = buf.readInt()
-      if (buf.readableBytes() < length) {
-        buf.resetReaderIndex()
-        null
-      } else {
-        buf.readBytes(length)
-      }
-    } else null
-  }
-}
-
-/** Decoded messages, contain header and optionally payload.
-  *
-  * @param header
-  * @param payload
-  */
-private class Rpc4Tuple(val header: RpcFour.Header, val payload: Option[Array[Byte]])
-
-/** Decoder. A message has a header and optionally a payload.
-  *
-  */
-private class RpcFramerDecoder extends SimpleChannelUpstreamHandler {
-  private[this] var storedHeader: Option[RpcFour.Header] = None
-
-  override def messageReceived(ctx: ChannelHandlerContext, e: MessageEvent): Unit = {
-    val frame = e.getMessage.asInstanceOf[ChannelBuffer]
-    storedHeader.synchronized {
-      if (storedHeader.isEmpty) {
-        val header = RpcFour.Header.parseFrom(frame.array())
-        if (header.getPayloadPresent) {
-          storedHeader = Some(header)
-        } else {
-          Channels.fireMessageReceived(ctx, new Rpc4Tuple(header, None))
-        }
-      } else {
-        val header = storedHeader.get
-        storedHeader = None
-        Channels.fireMessageReceived(ctx, new Rpc4Tuple(header, Some(frame.array())))
-      }
-    }
-  }
-}
-
-/** Encoder.
-  *
-  */
-private class RpcFramerEncoder extends SimpleChannelDownstreamHandler {
-  private[this] class JustReturnListener(e: MessageEvent) extends ChannelFutureListener {
-    def operationComplete(p1: ChannelFuture) {
-      if (p1.isSuccess) {
-        e.getFuture.setSuccess()
-      } else e.getFuture.setFailure(p1.getCause)
-    }
-  }
-
-  private[this] def withLength(channel: Channel, x: Array[Byte]) = {
-    val b = ChannelBuffers.wrappedBuffer(x)
-    val header = channel.getConfig.getBufferFactory.getBuffer(b.order(), 4)
-    header.writeInt(b.readableBytes())
-    ChannelBuffers.wrappedBuffer(header, b)
-  }
-
-  override def writeRequested(ctx: ChannelHandlerContext, e: MessageEvent) {
-    val rpc = e.getMessage.asInstanceOf[Rpc4Tuple]
-    val cf = Channels.future(e.getChannel)
-    val buffer = ChannelBuffers.wrappedBuffer(
-      (List(withLength(e.getChannel, rpc.header.toByteArray)) ++ rpc.payload.map(withLength(e.getChannel, _))):_*)
-    cf.addListener(new JustReturnListener(e))
-    Channels.write(ctx, cf, buffer)
-  }
-}
-
 private class RpcRegisterer(registry: Registry) extends SimpleChannelUpstreamHandler {
   private[this] val channels = {
     import scala.collection.JavaConverters._
@@ -164,10 +83,8 @@ private class RpcRegisterer(registry: Registry) extends SimpleChannelUpstreamHan
   * Offers a Future-based call interface.
   * @param channel Channel to work on.
   */
-class RpcClient(val channel: Channel) extends SimpleChannelUpstreamHandler with Logging {
+class RpcClient(val channel: Channel) extends SimpleChannelUpstreamHandler {
   // todo: implement org.stingray.contester.rpc4.RpcClient.exceptionCaught()
-
-  trace("Creating new rpc client for channel %s".format(channel))
 
   private[this] val requests = {
     import scala.collection.JavaConverters._
@@ -193,7 +110,7 @@ class RpcClient(val channel: Channel) extends SimpleChannelUpstreamHandler with 
     else {
       val result = new Promise[Option[Array[Byte]]]
       val requestId = sequenceNumber.getAndIncrement
-      val header = RpcFour.Header.newBuilder().setMessageType(RpcFour.Header.MessageType.REQUEST)
+      val header = Rpcfour.Header.newBuilder().setMessageType(Rpcfour.Header.MessageType.REQUEST)
         .setMethod(methodName).setPayloadPresent(payload.isDefined).setSequence(requestId).build()
 
       requests.put(requestId, result)
@@ -212,9 +129,9 @@ class RpcClient(val channel: Channel) extends SimpleChannelUpstreamHandler with 
   override def messageReceived(ctx: ChannelHandlerContext, e: MessageEvent) {
     val rpc = e.getMessage.asInstanceOf[Rpc4Tuple]
     rpc.header.getMessageType match  {
-      case RpcFour.Header.MessageType.RESPONSE =>
+      case Rpcfour.Header.MessageType.RESPONSE =>
         requests.remove(rpc.header.getSequence.toInt).map(_.setValue(rpc.payload))
-      case RpcFour.Header.MessageType.ERROR =>
+      case Rpcfour.Header.MessageType.ERROR =>
         requests.remove(rpc.header.getSequence.toInt).map(
           _.setException(new RemoteError(rpc.payload.map(new String(_, "UTF-8")).getOrElse("Unspecified error"))))
       case _ =>
@@ -229,23 +146,4 @@ class RpcClient(val channel: Channel) extends SimpleChannelUpstreamHandler with 
     }
     super.channelDisconnected(ctx, e)
   }
-
-  private[this] def callTrace[A](methodName: String, payload: Option[MessageLite])(f: Option[Array[Byte]] => A) = {
-    trace("Call: %s(%s)".format(methodName, payload))
-    callUntyped(methodName, payload.map(_.toByteArray)).map(f(_))
-      .onSuccess(result => trace("Result(%s): %s".format(methodName, result)))
-      .onFailure(error("Error(%s)", _))
-  }
-
-  def call[I <: com.google.protobuf.Message](methodName: String, payload: MessageLite)(implicit manifest: Manifest[I]) =
-    callTrace(methodName, Some(payload))(v => ProtobufTools.createProtobuf[I](v))
-
-  def call[I <: com.google.protobuf.Message](methodName: String)(implicit manifest: Manifest[I]) =
-    callTrace(methodName, None)(v => ProtobufTools.createProtobuf[I](v))
-
-  def callNoResult(methodName: String, payload: MessageLite) =
-    callTrace(methodName, Some(payload))(_ => ())
-
-  def callNoResult(methodName: String) =
-    callTrace(methodName, None)(_ => ())
 }

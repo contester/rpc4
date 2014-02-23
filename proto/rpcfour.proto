@@ -1,5 +1,7 @@
 package proto;
 
+option java_package = "org.stingray.contester.rpc4.proto";
+
 message Header {
     enum MessageType {
         REQUEST = 1;
