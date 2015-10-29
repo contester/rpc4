@@ -8,7 +8,7 @@ import (
 	"net"
 	"net/rpc"
 
-	"code.google.com/p/goprotobuf/proto"
+	"github.com/golang/protobuf/proto"
 	rpc4 "github.com/contester/rpc4/proto"
 )
 
