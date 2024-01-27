@@ -8,8 +8,8 @@ import (
 	"net"
 	"net/rpc"
 
-	"github.com/golang/protobuf/proto"
 	rpc4 "github.com/contester/rpc4/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 type codec struct {
@@ -17,7 +17,7 @@ type codec struct {
 	w io.WriteCloser
 
 	responsePayload, requestPayload bool
-	Shutdown bool
+	Shutdown                        bool
 }
 
 type ProtoReader interface {
