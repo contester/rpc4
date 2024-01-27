@@ -12,7 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type codec struct {
+type Codec struct {
 	r *bufio.Reader
 	w io.WriteCloser
 
@@ -57,11 +57,11 @@ func writeProto(w io.Writer, pb proto.Message) error {
 	return writeData(w, data)
 }
 
-func NewServerCodec(conn net.Conn) *codec {
-	return &codec{r: bufio.NewReader(conn), w: conn}
+func NewServerCodec(conn net.Conn) *Codec {
+	return &Codec{r: bufio.NewReader(conn), w: conn}
 }
 
-func (s *codec) ReadRequestHeader(req *rpc.Request) error {
+func (s *Codec) ReadRequestHeader(req *rpc.Request) error {
 	if s.Shutdown {
 		return rpc.ErrShutdown
 	}
@@ -82,14 +82,14 @@ func (s *codec) ReadRequestHeader(req *rpc.Request) error {
 	return nil
 }
 
-func (s *codec) ReadRequestBody(pb interface{}) error {
+func (s *Codec) ReadRequestBody(pb interface{}) error {
 	if s.requestPayload {
 		return readProto(s.r, pb.(proto.Message))
 	}
 	return nil
 }
 
-func (s *codec) writeHeaderData(header *rpc4.Header, data []byte) (err error) {
+func (s *Codec) writeHeaderData(header *rpc4.Header, data []byte) (err error) {
 	if len(data) > 0 {
 		header.PayloadPresent = proto.Bool(true)
 	}
@@ -100,7 +100,7 @@ func (s *codec) writeHeaderData(header *rpc4.Header, data []byte) (err error) {
 	return
 }
 
-func (s *codec) WriteResponse(resp *rpc.Response, pb interface{}) error {
+func (s *Codec) WriteResponse(resp *rpc.Response, pb interface{}) error {
 	var header rpc4.Header
 	header.Method, header.Sequence, header.MessageType = &resp.ServiceMethod, &resp.Seq, rpc4.Header_RESPONSE.Enum()
 
@@ -121,7 +121,7 @@ func (s *codec) WriteResponse(resp *rpc.Response, pb interface{}) error {
 	return s.writeHeaderData(&header, data)
 }
 
-func (s *codec) WriteRequest(req *rpc.Request, pb interface{}) error {
+func (s *Codec) WriteRequest(req *rpc.Request, pb interface{}) error {
 	var header rpc4.Header
 	header.Method, header.Sequence, header.MessageType = &req.ServiceMethod, &req.Seq, rpc4.Header_REQUEST.Enum()
 	var data []byte
@@ -134,7 +134,7 @@ func (s *codec) WriteRequest(req *rpc.Request, pb interface{}) error {
 	return s.writeHeaderData(&header, data)
 }
 
-func (s *codec) ReadResponseHeader(resp *rpc.Response) error {
+func (s *Codec) ReadResponseHeader(resp *rpc.Response) error {
 	if s.Shutdown {
 		return rpc.ErrShutdown
 	}
@@ -144,7 +144,7 @@ func (s *codec) ReadResponseHeader(resp *rpc.Response) error {
 		return err
 	}
 	if header.GetMethod() == "" {
-		return fmt.Errorf("header missing method: %s", header)
+		return fmt.Errorf("header missing method: %v", &header)
 	}
 
 	resp.ServiceMethod = header.GetMethod()
@@ -154,7 +154,7 @@ func (s *codec) ReadResponseHeader(resp *rpc.Response) error {
 	return nil
 }
 
-func (s *codec) ReadResponseBody(pb interface{}) error {
+func (s *Codec) ReadResponseBody(pb interface{}) error {
 	if s.responsePayload {
 		return readProto(s.r, pb.(proto.Message))
 	}
@@ -162,6 +162,6 @@ func (s *codec) ReadResponseBody(pb interface{}) error {
 }
 
 // Close closes the underlying conneciton.
-func (s *codec) Close() error {
+func (s *Codec) Close() error {
 	return s.w.Close()
 }

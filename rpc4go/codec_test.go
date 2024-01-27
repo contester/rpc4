@@ -2,8 +2,8 @@ package rpc4go
 
 import (
 	"bytes"
-	"testing"
 	"net/rpc"
+	"testing"
 
 	"bufio"
 )
@@ -17,7 +17,7 @@ func (b *bufc) Close() error { return nil }
 func TestRW(t *testing.T) {
 	var buf bufc
 
-	var c codec
+	var c Codec
 	c.w = &buf
 	var req rpc.Request
 	req.Seq = 1
